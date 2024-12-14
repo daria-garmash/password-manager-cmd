@@ -4,7 +4,7 @@ import pyfiglet
 import pyperclip3
 import sqlite3
 import os
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, exceptions
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -80,22 +80,28 @@ def print_options():
     print("5 - Copy password to clipboard")
 
 def auth(cursor, connection) -> list[bytes | Any]:
+    #Check if local user exists
+    with open("./sql-scripts/select-password-salt-from-users-by-name.sql", "r") as file:
+       query = file.read()
 
-    query = "SELECT password, salt FROM users WHERE user_name = 'local_user'"
     cursor.execute(query)
     output = cursor.fetchone()
     if output is None:
-        print("Looks like you don't have a master password set up.")
+        print("\nLooks like you don't have a master password set up.")
         register_new_user(cursor, connection)
         cursor.execute(query)
         output = cursor.fetchone()
 
-    print(output)
+   # print(output)
     output_pass = output[0]
     output_salt = output[1]
-    master_password = input("Enter master password to the password manager: ")
-    if not ph.verify(output_pass, master_password):
-        print("Wrong password!")
+    while True:
+        master_password = input("\nEnter master password to the password manager: ")
+        try:
+            ph.verify(output_pass, master_password)
+            break
+        except exceptions.VerifyMismatchError as e:
+            print("Wrong password!")
     key = derive_key(master_password.encode(), output_salt)
     return [key, output_salt]
 
@@ -106,21 +112,32 @@ def add(connection, cursor, encryptor):
     url = input("URL (optional): ")
     username = input("Username: ")
     password = input("Password: ")
-    cipher_pass = encryptor.update(password.encode()) + encryptor.finalize()
 
-    query = "INSERT INTO entries (name, description, url, username, password_enc) VALUES (?, ?, ?, ?, ?)"
-    cursor.execute(query, (entry_name, description, url, username, cipher_pass))
-    connection.commit()
+    print("Please confirm save")
+    option = input("1 - save and go back or 0 - go back without saving")
+    if option == 0:
+        return
+    elif option == 1:
+        cipher_pass = encryptor.update(password.encode()) + encryptor.finalize()
 
+        with open("./sql-scripts/insert-entries.sql", "r") as file:
+            query = file.read()
+        cursor.execute(query, (entry_name, description, url, username, cipher_pass))
+        connection.commit()
     #test_storage.append(entry)
 
 def get_all_creds(cursor):
     #print(test_storage)
-    query = "SELECT name, description, url, username FROM entries"
+    with open("./sql-scripts/select-entries-all.sql", "r") as file:
+        query = file.read()
     cursor.execute(query)
     output = cursor.fetchall()
+    print("--------------------------------------------------------")
+    print("| Name | Description | URL | Username")
+    print("--------------------------------------------------------")
     for row in output:
-        print(row)
+        print(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]}")
+    print("--------------------------------------------------------")
 
 def register_new_user(cursor, connection):
     while True:
@@ -133,9 +150,11 @@ def register_new_user(cursor, connection):
     passw_hash = ph.hash(master_password)  #Adds random salt
     username = "local_user"
     salt = os.urandom(16)
+    saltEncr = os.urandom(16) #separate salt for password encryption to be saved to db
 
-    query = "INSERT INTO users (user_name, password, salt) VALUES (?, ?, ?)"
-    cursor.execute(query, (username, passw_hash, salt))
+    with open("./sql-scripts/insert-users.sql", "r") as file:
+        query = file.read()
+    cursor.execute(query, (username, passw_hash, saltEncr))
     print("Account was created successfully!")
     connection.commit()
 
@@ -159,10 +178,10 @@ def get_password_by_name(cursor, decryptor):
     name = input("Please enter name of the credentials or '0' to go back: ")
     if name != '0':
         #logic to get the entry by name
-        query = "SELECT password_enc FROM entries WHERE name like ?"
+        with open("./sql-scripts/select-password-from-entries-by-name.sql", "r") as file:
+            query = file.read()
         cursor.execute(query, (name,))
         db_password = cursor.fetchone()[0]
-        print(db_password)
         password = decryptor.update(db_password) + decryptor.finalize()
         password = password.decode()
         pyperclip3.copy(password)

@@ -1,0 +1,1 @@
+INSERT INTO entries (name, description, url, username, password_enc) VALUES (?, ?, ?, ?, ?)

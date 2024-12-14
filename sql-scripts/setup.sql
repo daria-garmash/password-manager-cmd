@@ -14,5 +14,3 @@ CREATE TABLE IF NOT EXISTS entries (
     username TEXT NOT NULL,
     password_enc TEXT NOT NULL
 );
-
-truncate table entries;

@@ -1,0 +1,1 @@
+SELECT password_enc FROM entries WHERE name like ?

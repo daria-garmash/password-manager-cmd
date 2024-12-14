@@ -1,0 +1,1 @@
+SELECT name, description, url, username FROM entries

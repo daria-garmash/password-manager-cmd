@@ -1,0 +1,1 @@
+SELECT password, salt FROM users WHERE user_name = 'local_user'
