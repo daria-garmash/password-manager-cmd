@@ -11,6 +11,6 @@ CREATE TABLE IF NOT EXISTS entries (
     name TEXT NOT NULL,
     description TEXT ,
     url TEXT,
-    username TEXT NOT NULL,
+    username TEXT,
     password_enc TEXT NOT NULL
 );

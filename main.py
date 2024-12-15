@@ -1,6 +1,7 @@
 from typing import List, Any
-
 import pyfiglet
+from getpass import getpass
+import maskpass
 import pyperclip3
 import sqlite3
 import os
@@ -10,9 +11,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # Create a PasswordHasher instance
 ph = PasswordHasher()
-
-test_storage = []
-local_creds = {}
 
 def main():
     art = pyfiglet.figlet_format("T e r m i n a l  V a u l t", font = "slant", width = 500)
@@ -31,17 +29,16 @@ def main():
     key = auth_result[0]
     salt = auth_result[1]
     cipher = Cipher(algorithms.AES(key), modes.CFB(salt))
-    decryptor = cipher.decryptor()
-    encryptor = cipher.encryptor()
 
     while True:
         print_options()
         option = input("Enter option number: ")
         match option:
             case "0": break
-            case "3": add(sqlite_connection, cursor, encryptor)
-            case "4": get_all_creds(cursor)
-            case "5": get_password_by_name(cursor, decryptor)
+            case "1": add(sqlite_connection, cursor, cipher)
+            case "2": get_all_creds(cursor)
+            case "3": get_password_by_id( cursor, cipher)
+            case "4": update_password_by_id(sqlite_connection, cursor, cipher)
             case _: print("Unknown option")
 
     if sqlite_connection:
@@ -73,11 +70,10 @@ def db_setup(cursor):
 def print_options():
     print("Available options:")
     print("0 - Exit")
-    #print("1 - Authenticate")
-    #print("2 - Get available options")
-    print("3 - Add new password")
-    print("4 - Get available credentials")
-    print("5 - Copy password to clipboard")
+    print("1 - Add new password")
+    print("2 - Get available credentials")
+    print("3 - Copy password to clipboard")
+    print("4 - Update password")
 
 def auth(cursor, connection) -> list[bytes | Any]:
     #Check if local user exists
@@ -96,7 +92,9 @@ def auth(cursor, connection) -> list[bytes | Any]:
     output_pass = output[0]
     output_salt = output[1]
     while True:
-        master_password = input("\nEnter master password to the password manager: ")
+        #master_password = input("\nEnter master password to the password manager: ")
+        #master_password = getpass(prompt="\nEnter master password to the password manager: ")
+        master_password = maskpass.askpass(prompt="\nEnter master password to the password manager: ", mask="*")
         try:
             ph.verify(output_pass, master_password)
             break
@@ -105,19 +103,19 @@ def auth(cursor, connection) -> list[bytes | Any]:
     key = derive_key(master_password.encode(), output_salt)
     return [key, output_salt]
 
-def add(connection, cursor, encryptor):
-
+def add(connection, cursor, cipher):
+    encryptor = cipher.encryptor()
     entry_name = input("Name for the new entry (short and easy to type): ")
     description = input("Description (optional): ")
     url = input("URL (optional): ")
     username = input("Username: ")
-    password = input("Password: ")
+    password = maskpass.askpass(prompt="Password: ", mask="*")
 
     print("Please confirm save")
-    option = input("1 - save and go back or 0 - go back without saving")
-    if option == 0:
+    option = input("1 - save and go back or 0 - go back without saving: ")
+    if option == "0":
         return
-    elif option == 1:
+    elif option == "1":
         cipher_pass = encryptor.update(password.encode()) + encryptor.finalize()
 
         with open("./sql-scripts/insert-entries.sql", "r") as file:
@@ -127,22 +125,22 @@ def add(connection, cursor, encryptor):
     #test_storage.append(entry)
 
 def get_all_creds(cursor):
-    #print(test_storage)
+
     with open("./sql-scripts/select-entries-all.sql", "r") as file:
         query = file.read()
     cursor.execute(query)
     output = cursor.fetchall()
     print("--------------------------------------------------------")
-    print("| Name | Description | URL | Username")
+    print("| ID | Name | Description | URL | Username")
     print("--------------------------------------------------------")
     for row in output:
-        print(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]}")
+        print(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} |")
     print("--------------------------------------------------------")
 
 def register_new_user(cursor, connection):
     while True:
-        master_password = input("Create master password for your account: ")
-        master_password_confirm = input("Confirm master password for your account: ")
+        master_password = maskpass.askpass(prompt="Create master password for your account: ", mask="*")
+        master_password_confirm = maskpass.askpass(prompt="Confirm master password for your account: ",  mask="*")
         if master_password == master_password_confirm:
             break
         else:
@@ -173,20 +171,43 @@ def derive_key(password, salt):
     )
     return key
 
-def get_password_by_name(cursor, decryptor):
-    print("Note: if you are not sure about the name check option 4 in the main menu")
-    name = input("Please enter name of the credentials or '0' to go back: ")
-    if name != '0':
-        #logic to get the entry by name
-        with open("./sql-scripts/select-password-from-entries-by-name.sql", "r") as file:
+def get_password_by_id(cursor, cipher):
+
+    decryptor = cipher.decryptor()
+    print("\nNote: if you are not sure about the id check option 2 in the main menu")
+    cred_id = input("Please enter id of the credentials or '0' to go back: ")
+    if cred_id != '0':
+        #logic to get the entry by id
+        with open("sql-scripts/select-account-name-by-id.sql", "r") as file:
             query = file.read()
-        cursor.execute(query, (name,))
+        cursor.execute(query, (cred_id,))
+        account_name = cursor.fetchone()[0]
+        with open("sql-scripts/select-password-from-entries-by-id.sql", "r") as file:
+            query = file.read()
+        cursor.execute(query, (cred_id,))
         db_password = cursor.fetchone()[0]
         password = decryptor.update(db_password) + decryptor.finalize()
         password = password.decode()
         pyperclip3.copy(password)
-        print("Your password was copied to clipboard!")
+        print(f"Your {account_name} password was copied to clipboard!")
 
+def update_password_by_id(connection, cursor, cipher):
+
+    encryptor = cipher.encryptor()
+    print("\nNote: if you are not sure about the id check option 2 in the main menu")
+    cred_id = input("Please enter id of the credentials or '0' to go back: ")
+    if cred_id != '0':
+        with open("sql-scripts/select-account-name-by-id.sql", "r") as file:
+            query = file.read()
+        cursor.execute(query, (cred_id,))
+        account_name = cursor.fetchone()[0]
+        new_password = maskpass.askpass(prompt=str.format("Create new password for {}: ", account_name), mask="*")
+        cipher_pass = encryptor.update(new_password.encode()) + encryptor.finalize()
+        with open("./sql-scripts/update-password-in-entries.sql", "r") as file:
+            query = file.read()
+        cursor.execute(query, (cipher_pass, cred_id))
+        connection.commit()
+        print("Your password was updated successfully!")
 
 if __name__ == "__main__":
     main()

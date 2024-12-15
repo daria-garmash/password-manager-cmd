@@ -1,1 +1,2 @@
-SELECT name, description, url, username FROM entries
+SELECT id, name, description, url, username
+FROM entries
