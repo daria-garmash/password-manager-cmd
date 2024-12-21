@@ -1,3 +1,5 @@
+import random
+import string
 from typing import List, Any
 import pyfiglet
 from getpass import getpass
@@ -38,7 +40,12 @@ def main():
             case "1": add(sqlite_connection, cursor, cipher)
             case "2": get_all_creds(cursor)
             case "3": get_password_by_id( cursor, cipher)
-            case "4": update_password_by_id(sqlite_connection, cursor, cipher)
+            case "4":
+                update_password_by_id(cursor, cipher)
+                sqlite_connection.commit()
+            case "5":
+                delete_password_by_id(cursor)
+                sqlite_connection.commit()
             case _: print("Unknown option")
 
     if sqlite_connection:
@@ -74,6 +81,7 @@ def print_options():
     print("2 - Get available credentials")
     print("3 - Copy password to clipboard")
     print("4 - Update password")
+    print("5 - Delete password")
 
 def auth(cursor, connection) -> list[bytes | Any]:
     #Check if local user exists
@@ -109,7 +117,11 @@ def add(connection, cursor, cipher):
     description = input("Description (optional): ")
     url = input("URL (optional): ")
     username = input("Username: ")
-    password = maskpass.askpass(prompt="Password: ", mask="*")
+    option = input("To generate a secure random password string press 'G'. Press 'Enter' to continue with your custom passwords: " )
+    if option.capitalize() == "G":
+        password = ask_generate_password()
+    else:
+        password = maskpass.askpass(prompt="Password: ", mask="*")
 
     print("Please confirm save")
     option = input("1 - save and go back or 0 - go back without saving: ")
@@ -122,7 +134,6 @@ def add(connection, cursor, cipher):
             query = file.read()
         cursor.execute(query, (entry_name, description, url, username, cipher_pass))
         connection.commit()
-    #test_storage.append(entry)
 
 def get_all_creds(cursor):
 
@@ -191,23 +202,58 @@ def get_password_by_id(cursor, cipher):
         pyperclip3.copy(password)
         print(f"Your {account_name} password was copied to clipboard!")
 
-def update_password_by_id(connection, cursor, cipher):
+def update_password_by_id(cursor, cipher):
 
     encryptor = cipher.encryptor()
     print("\nNote: if you are not sure about the id check option 2 in the main menu")
     cred_id = input("Please enter id of the credentials or '0' to go back: ")
     if cred_id != '0':
-        with open("sql-scripts/select-account-name-by-id.sql", "r") as file:
-            query = file.read()
-        cursor.execute(query, (cred_id,))
-        account_name = cursor.fetchone()[0]
-        new_password = maskpass.askpass(prompt=str.format("Create new password for {}: ", account_name), mask="*")
+        account_name = get_credentials_name(cursor, cred_id)
+
+        option = input("To generate a new secure random password string press 'G'. Press 'Enter' to continue with your custom password: ")
+        if option.capitalize() == "G":
+            new_password = ask_generate_password()
+        else:
+            new_password = maskpass.askpass(prompt=str.format("Create new password for {}: ", account_name), mask="*")
         cipher_pass = encryptor.update(new_password.encode()) + encryptor.finalize()
         with open("./sql-scripts/update-password-in-entries.sql", "r") as file:
             query = file.read()
         cursor.execute(query, (cipher_pass, cred_id))
-        connection.commit()
-        print("Your password was updated successfully!")
+        print(f"Your {account_name} password was updated successfully!")
 
+def delete_password_by_id(cursor):
+    print("\nNote: if you are not sure about the id check option 2 in the main menu")
+    cred_id = input("Please enter id of the credentials or '0' to go back: ")
+    if cred_id != '0':
+        account_name = get_credentials_name(cursor, cred_id)
+        print(f"You are deleting your {account_name} password.")
+        option = input("Please enter 'Y' to proceed or 'N' to go back: ")
+        if option.capitalize() == "N":
+            return
+        elif option.capitalize() == "Y":
+            with open("./sql-scripts/delete-entry-by-id.sql", "r") as file:
+                query = file.read()
+            cursor.execute(query,(cred_id,))
+            print("Your password was deleted successfully!")
+
+def get_credentials_name(cursor, cred_id):
+    with open("./sql-scripts/select-account-name-by-id.sql", "r") as file:
+        query = file.read()
+    cursor.execute(query, (cred_id,))
+    account_name = cursor.fetchone()[0]
+    return account_name
+
+def ask_generate_password():
+    print("You opted to generate a secure random password.")
+    length = input("Enter the desired length of the password between 8 and 24 or leave blank for the default length of 11 characters: ")
+    if length == "": length = 11
+    else: length = int(length)
+
+    return generate_password(length)
+
+def generate_password(length):
+    characters = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(random.choice(characters) for i in range(length))
+    return password
 if __name__ == "__main__":
     main()
