@@ -1,8 +1,9 @@
 import random
+import re
 import string
+import sys
 from typing import List, Any
 import pyfiglet
-from getpass import getpass
 import maskpass
 import pyperclip3
 import sqlite3
@@ -10,6 +11,12 @@ import os
 from argon2 import PasswordHasher, exceptions
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from exceptions.invalid_id import InvalidIdException
+#custom exceptions
+from exceptions.invalid_input import InvalidInputException
+from exceptions.invalid_length import InvalidLengthException
+from exceptions.invalid_password import InvalidPasswordException
 
 # Create a PasswordHasher instance
 ph = PasswordHasher()
@@ -99,15 +106,18 @@ def auth(cursor, connection) -> list[bytes | Any]:
    # print(output)
     output_pass = output[0]
     output_salt = output[1]
+    count = 0
     while True:
-        #master_password = input("\nEnter master password to the password manager: ")
-        #master_password = getpass(prompt="\nEnter master password to the password manager: ")
+        if count > 5:
+            print("You've reached the threshold of 5 incorrect attempts. The program will now terminate.")
+            sys.exit()
         master_password = maskpass.askpass(prompt="\nEnter master password to the password manager: ", mask="*")
         try:
             ph.verify(output_pass, master_password)
             break
         except exceptions.VerifyMismatchError as e:
             print("Wrong password!")
+            count = count + 1
     key = derive_key(master_password.encode(), output_salt)
     return [key, output_salt]
 
@@ -185,22 +195,21 @@ def derive_key(password, salt):
 def get_password_by_id(cursor, cipher):
 
     decryptor = cipher.decryptor()
-    print("\nNote: if you are not sure about the id check option 2 in the main menu")
+    print("\nNote: if you are not sure about the ID check option 2 in the main menu")
     cred_id = input("Please enter id of the credentials or '0' to go back: ")
     if cred_id != '0':
-        #logic to get the entry by id
-        with open("sql-scripts/select-account-name-by-id.sql", "r") as file:
-            query = file.read()
-        cursor.execute(query, (cred_id,))
-        account_name = cursor.fetchone()[0]
-        with open("sql-scripts/select-password-from-entries-by-id.sql", "r") as file:
-            query = file.read()
-        cursor.execute(query, (cred_id,))
-        db_password = cursor.fetchone()[0]
-        password = decryptor.update(db_password) + decryptor.finalize()
-        password = password.decode()
-        pyperclip3.copy(password)
-        print(f"Your {account_name} password was copied to clipboard!")
+        try:
+            account_name = get_credentials_name(cursor, cred_id)
+            with open("sql-scripts/select-password-from-entries-by-id.sql", "r") as file:
+                query = file.read()
+            cursor.execute(query, (cred_id,))
+            db_password = cursor.fetchone()[0]
+            password = decryptor.update(db_password) + decryptor.finalize()
+            password = password.decode()
+            pyperclip3.copy(password)
+            print(f"Your {account_name} password was copied to clipboard!")
+        except InvalidInputException as e:
+            print(f"Invalid input: {e}")
 
 def update_password_by_id(cursor, cipher):
 
@@ -208,52 +217,91 @@ def update_password_by_id(cursor, cipher):
     print("\nNote: if you are not sure about the id check option 2 in the main menu")
     cred_id = input("Please enter id of the credentials or '0' to go back: ")
     if cred_id != '0':
-        account_name = get_credentials_name(cursor, cred_id)
+        try:
+            account_name = get_credentials_name(cursor, cred_id)
+            option = input("To generate a new secure random password string press 'G'. Press 'Enter' to continue with your custom password: ")
+            if option.capitalize() == "G":
+                new_password = ask_generate_password()
+            else:
+                new_password = maskpass.askpass(prompt=str.format("Create new password for {}: ", account_name), mask="*")
+            cipher_pass = encryptor.update(new_password.encode()) + encryptor.finalize()
+            with open("./sql-scripts/update-password-in-entries.sql", "r") as file:
+                query = file.read()
+            cursor.execute(query, (cipher_pass, cred_id))
+            print(f"Your {account_name} password was updated successfully!")
+        except InvalidInputException as e:
+            print(f"Invalid input: {e}")
 
-        option = input("To generate a new secure random password string press 'G'. Press 'Enter' to continue with your custom password: ")
-        if option.capitalize() == "G":
-            new_password = ask_generate_password()
-        else:
-            new_password = maskpass.askpass(prompt=str.format("Create new password for {}: ", account_name), mask="*")
-        cipher_pass = encryptor.update(new_password.encode()) + encryptor.finalize()
-        with open("./sql-scripts/update-password-in-entries.sql", "r") as file:
-            query = file.read()
-        cursor.execute(query, (cipher_pass, cred_id))
-        print(f"Your {account_name} password was updated successfully!")
 
 def delete_password_by_id(cursor):
     print("\nNote: if you are not sure about the id check option 2 in the main menu")
     cred_id = input("Please enter id of the credentials or '0' to go back: ")
     if cred_id != '0':
-        account_name = get_credentials_name(cursor, cred_id)
-        print(f"You are deleting your {account_name} password.")
-        option = input("Please enter 'Y' to proceed or 'N' to go back: ")
-        if option.capitalize() == "N":
-            return
-        elif option.capitalize() == "Y":
-            with open("./sql-scripts/delete-entry-by-id.sql", "r") as file:
-                query = file.read()
-            cursor.execute(query,(cred_id,))
-            print("Your password was deleted successfully!")
+        try:
+            account_name = get_credentials_name(cursor, cred_id)
+            print(f"You are deleting your {account_name} password.")
+            option = input("Please enter 'Y' to proceed or 'N' to go back: ")
+            if option.capitalize() == "N":
+                return
+            elif option.capitalize() == "Y":
+                with open("./sql-scripts/delete-entry-by-id.sql", "r") as file:
+                    query = file.read()
+                cursor.execute(query,(cred_id,))
+                print("Your password was deleted successfully!")
+        except InvalidInputException as e:
+            print(f"Invalid input: {e}")
 
 def get_credentials_name(cursor, cred_id):
     with open("./sql-scripts/select-account-name-by-id.sql", "r") as file:
         query = file.read()
     cursor.execute(query, (cred_id,))
+    if cursor.rowcount <= 0:
+        raise InvalidIdException(f"ID {cred_id} was not found. Please check option 2 to get the ID you need.")
     account_name = cursor.fetchone()[0]
     return account_name
 
 def ask_generate_password():
     print("You opted to generate a secure random password.")
-    length = input("Enter the desired length of the password between 8 and 24 or leave blank for the default length of 11 characters: ")
-    if length == "": length = 11
-    else: length = int(length)
-
+    while True:
+        try:
+            length = input("Enter the desired length of the password between 8 and 24 or leave blank for the default length of 11 characters: ")
+            if length == "":
+                length = 11
+                break
+            if all(char.isdigit() for char in length) and 8 <= int(length) <= 24:
+                length = int(length)
+                break
+            else:
+                raise InvalidLengthException("Length must be a number between 8 and 24")
+        except InvalidInputException as e:
+            print(f"Invalid input: {e}")
     return generate_password(length)
 
 def generate_password(length):
     characters = string.ascii_letters + string.digits + string.punctuation
-    password = ''.join(random.choice(characters) for i in range(length))
+    password = ''
+    correct = 0
+    while correct == 0:
+        password = ''.join(random.choice(characters) for i in range(length))
+        try :
+            validate_password(password, length)
+            correct = 1
+        except InvalidInputException as e:
+            correct = 0
     return password
+
+def validate_password(password, length = 11):
+    if len(password) < length :
+        raise InvalidPasswordException(f"Password must be {length} characters long")
+    if not any(char.isupper() for char in password):
+        raise InvalidPasswordException("Password must contain at least one uppercase character")
+    if not any(char.islower() for char in password):
+        raise InvalidPasswordException("Password must contain at least one lowercase character")
+    if not any(char.isdigit() for char in password):
+        raise InvalidPasswordException("Password must contain at least one number")
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+        raise InvalidPasswordException("Password must contain at least one special character")
+
+
 if __name__ == "__main__":
     main()
